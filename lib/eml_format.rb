@@ -23,24 +23,24 @@ class EmlFormat
 
   # Gets the boundary name
   def get_boundary(content_type)
-    boundary = content_type.scan(/boundary="?(.+?)"?(\s*;[\s\S]*)?$/)
+    boundary = content_type.match(/^boundary="?(.+?)"?(\s*;[\s\S]*)?$/)
     boundary ? boundary[1] : nil
   end
 
   # Gets character set name, e.g. contentType='.....charset="iso-8859-2"....'
   def get_char_set(content_type)
-    char_set = content_type.scan(/charset\s*=\W*([\w\-]+)/)
+    char_set = content_type.match(/charset\s*=\W*([\w\-]+)/)
     char_set ? boundary[1] : nil
   end
 
   def get_charset_name(charset)
-    charset.downcase.scan(/[^0-9a-z]/, "")
+    charset.downcase.match(/[^0-9a-z]/, "")
   end
 
   # Gets name and e-mail address from a string, e.g. "PayPal" <noreply@paypal.com> => { name: "PayPal", email: "noreply@paypal.com" }
   def get_email_address(raw)
     list = []
-    parts = raw.scan(/("[^"]*")|[^,]+/)
+    parts = raw.match(/("[^"]*")|[^,]+/)
 
     parts.each do |ele|
       address = OpenStruct.new
@@ -48,7 +48,7 @@ class EmlFormat
       # Quoted name but without the e-mail address - TODO
 
       regex = /^(.*?)(\s*<(.*?)>)$/
-      match = regex.scan(parts[i])
+      match = regex.match(parts[i])
 
       if match
         name = unquote_string(ele).replace(/"/, '').strip
@@ -88,7 +88,7 @@ class EmlFormat
 
   def unquote_string(s)
     regex = /=\?([^?]+)\?(B|Q)\?(.+?)(\?=)/
-    match = regex.scan(s)
+    match = regex.match(s)
 
     if match
       charset = get_charset_name(match[1] || @default_charset)
@@ -265,16 +265,16 @@ class EmlFormat
       end
     elsif encoding == 'quoted-printable'
       content = unquote_printable(content, charset)
-    elsif charset != "utf8" && (encoding.start_with? ("binary") || encoding.start_with? ("8bit"))
+    elsif charset != "utf8" && ((encoding.start_with? ("binary")) || (encoding.start_with? ("8bit")))
       content = Base64.decode64(content, charset)
     end
 
-    if !result.dig(:html) && content_type && content_type.index "text/html"
+    if !result.dig(:html) && content_type && (content_type.index "text/html")
       if content.instance_of? (String)
         content = Base64.decode64(content, charset)
       end
       result[:html] = content
-    elsif !result.dig(:text) && content_type && content_type.index "text/plain"
+    elsif !result.dig(:text) && content_type && (content_type.index "text/plain")
       if content.instance_of? (String)
         content = Base64.decode64(content, charset)
       end
@@ -294,7 +294,7 @@ class EmlFormat
       name = headers["Content-Disposition"] || headers["Content-Type"]
 
       if name
-        match = /name="?(.+?)"?$/.scan(name)
+        match = name.match(/name="?(.+?)"?$/)
         if match
           name = match[1]
         else
@@ -315,7 +315,7 @@ class EmlFormat
       cd = headers["Content-Disposition"]
 
       if cd
-        attachment[:inline] = /^\s*inline/.scan(cd)
+        attachment[:inline] = cd.match(/^\s*inline/)
       end
 
       attachment[:data] = content
@@ -331,12 +331,12 @@ class EmlFormat
   #  @params callback    Callback function(error, data)
   # ******************************************************************************************
   def read(data:, options: nil, callback: nil)
-    parsed_data = parse(data: data, options: options, callback: callback)
+    parsed_data = parse(eml: data, options: options, callback: callback)
 
     begin
       result = {}
       result[:date] = new Date(data.dig(:headers)) if data.dig(:headers, 'Date')
-
+      # byebug
       result[:subject] = unquote_string(data.dig(:headers, :subject)) if data.dig(:subject)
 
       %i[from to CC cc].each do |item|
@@ -348,8 +348,8 @@ class EmlFormat
       boundary = nil
 
       ct = data.dig(:headers, 'Content-Type')
-
-      if ct && /^multipart\//.scan(ct)
+      # byebug
+      if ct && ct.match(/^multipart\//)
         b = get_boundary(ct)
         if b && b.length
           boundary = b
@@ -395,8 +395,11 @@ class EmlFormat
   #  * @params callback    Callback function(error, data)
   #  ******************************************************************************************
   def parse(eml:, options: nil, callback: nil)
-    lines = eml.split("/\r?\n/")
-
+    # sub_data = eml.gsub!(/\r\n?/, "")
+    # byebug
+    lines = eml
+    # lines = File.readlines('sample.eml')
+    # byebug
     result = {}
     parse_recursively(lines, 0, result, options)
 
@@ -423,18 +426,18 @@ class EmlFormat
     is_multi_part = false
 
     parent[:headers] = {}
-
-    lines.each do |line|
+    lines.each_with_index do |line, index|
       # Header
       if !is_inside_body
+        puts "insideBody"
         # Search for empty line
-        if line == ''
+        if line.empty?
           is_inside_body = true
           break if options && options[:headers_only]
 
           # Expected boundary
           ct = parent[:headers]['Content-Type']
-          if ct && %r{^multipart/}.scan(ct)
+          if ct && ct.match(/^multipart\//)
             b = get_boundary(ct)
             if b && b.size
               find_boundary = b
@@ -448,18 +451,19 @@ class EmlFormat
         end
 
         # Header value with new line
-        match = /^\s+([^\r\n]+)/.scan(line)
+        match = /^\s+([^\n]+)/.match(line)&.string
+        puts "line" + line + "   " + match.to_s
         if match
           if is_multi_header
-            parent[:headers][:last_header_name][parent[:headers][:last_header_name].length - 1] += "\r\n" + match[1]
+            parent[:headers][last_header_name][parent[:headers][last_header_name]&.length - 1] += "\r\n" + match[1]
           else
-            parent[:headers][:last_header_name] += "\r\n" + match[1]
+            parent[:headers][last_header_name] += "\r\n" + match[1]
           end
           next
         end
 
         # Header name and value
-        match = /^([\w\d\-]+):\s+([^\r\n]+)/.scan(line)
+        match = line.match(/^([\w\d\-]+):\s+([^\r\n]+)/)
         if match
           last_header_name = match[1]
           if parent[:headers][last_header_name]
@@ -477,13 +481,14 @@ class EmlFormat
         end
       # Body
       elsif is_multi_part
+        puts "inside multipart"
         # Multipart body
-        if line.indexOf('--' + findBoundary) == 0 && !/--(\r?\n)?$/.scan(line)
+        if line.indexOf('--' + findBoundary) == 0 && !line.match(/--(\r?\n)?$/)
           is_inside_boundary = true
 
           complete(boundary) if boundary && boundary[:lines]
 
-          match = /^--([^\r\n]+)(\r?\n)?$/.scan(line)
+          match = line.match(/^--([^\r\n]+)(\r?\n)?$/)
           boundary = { boundary: match[1], lines: [] }
           parent[:body].push(boundary)
 
@@ -501,7 +506,8 @@ class EmlFormat
         end
       # Search for boundary start
       else
-        parent[:body] = lines.splice(line).join("\r\n")
+        # Solid string body
+        parent[:body] = lines.slice(index, line.length - 1).join("\r\n")
         break
       end
 
