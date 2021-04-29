@@ -40,28 +40,30 @@ class EmlFormat
   # Gets name and e-mail address from a string, e.g. "PayPal" <noreply@paypal.com> => { name: "PayPal", email: "noreply@paypal.com" }
   def get_email_address(raw)
     list = []
-    parts = raw.match(/("[^"]*")|[^,]+/)
+    raw
+    parts = raw.match(/("[^"]*")(\s<?[a-zA-Z0-9]+@[a-zA-Z0-9]+.[a-zA-Z0-9]+>)/)
+    address = {}
+    if parts.instance_of? MatchData
+      parts.to_a&.each_with_index do |ele, index|
+        # Quoted name but without the e-mail address - TODO
+        regex = /^(.*?)(\s*<(.*?)>)$/
+        match = regex.match(parts[index])
+        if match
+          name = unquote_string(ele).replace(/"/, '').strip
+          address.name = name if name
+          address.email = match[3].strip
+          list.push(address)
+        else
+          address.email = ele.strip
+          list.push(address)
+        end
 
-    parts.each do |ele|
-      address = OpenStruct.new
-
-      # Quoted name but without the e-mail address - TODO
-
-      regex = /^(.*?)(\s*<(.*?)>)$/
-      match = regex.match(parts[i])
-
-      if match
-        name = unquote_string(ele).replace(/"/, '').strip
-        address.name = name if name
-        address.email = match[3].strip
-        list.push(address)
-      else
-        address.email = ele.strip
-        list.push(address)
+        return nil if list.empty?
+        return list[0] if list.length == 1
       end
-
-      return nil if list.empty?
-      return list[0] if list.length == 1
+    else
+      address[:email] = raw.strip
+      list.push(address)
     end
 
     list
@@ -87,11 +89,12 @@ class EmlFormat
   end
 
   def unquote_string(s)
-    regex = /=\?([^?]+)\?(B|Q)\?(.+?)(\?=)/
+    regex = /\?([^?]+)\?(B|Q)\?(.+?)(\?=)/
     match = regex.match(s)
 
     if match
-      charset = get_charset_name(match[1] || @default_charset)
+      input = match[1] || @default_charset
+      charset = get_charset_name(input)
       type = match[2].upcase
       value = match[3]
 
@@ -335,19 +338,18 @@ class EmlFormat
 
     begin
       result = {}
-      result[:date] = new Date(data.dig(:headers)) if data.dig(:headers, 'Date')
+      result[:date] = new Date(parsed_data.dig(:headers)) if parsed_data.dig(:headers, 'Date')
       # byebug
-      result[:subject] = unquote_string(data.dig(:headers, :subject)) if data.dig(:subject)
+      result[:subject] = unquote_string(parsed_data.dig(:headers, "Subject")) if parsed_data.dig(:headers, "Subject")
 
-      %i[from to CC cc].each do |item|
-        result[item] = get_email_address(data.dig(:headers, item))
+      %w[From To CC cc].each do |item|
+        result[item] = get_email_address(parsed_data.dig(:headers, item))
       end
 
-      result[:headers] = data.dig(:headers)
+      result[:headers] = parsed_data.dig(:headers)
 
       boundary = nil
-
-      ct = data.dig(:headers, 'Content-Type')
+      ct = parsed_data.dig(:headers, 'Content-Type')
       # byebug
       if ct && ct.match(/^multipart\//)
         b = get_boundary(ct)
@@ -385,6 +387,7 @@ class EmlFormat
       end
       callback.call(result)
     rescue StandardError => e
+      puts e
     end
   end
 
@@ -396,14 +399,12 @@ class EmlFormat
   #  ******************************************************************************************
   def parse(eml:, options: nil, callback: nil)
     # sub_data = eml.gsub!(/\r\n?/, "")
-    # byebug
     lines = eml
     # lines = File.readlines('sample.eml')
-    # byebug
     result = {}
     parse_recursively(lines, 0, result, options)
 
-    callback.call(result)
+    result
   rescue StandardError => e
     print e
   ensure
@@ -436,7 +437,7 @@ class EmlFormat
           break if options && options[:headers_only]
 
           # Expected boundary
-          ct = parent[:headers]['Content-Type']
+          ct = parent[:headers]["Content-Type"]
           if ct && ct.match(/^multipart\//)
             b = get_boundary(ct)
             if b && b.size
